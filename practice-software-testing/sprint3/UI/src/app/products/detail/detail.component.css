@@ -1,0 +1,43 @@
+/* Copyright (c) 2024-2026 Testsmith. All rights reserved. See LICENSE for details. */
+
+/* Sprint 3 - Product detail with shadows + hover */
+/* Shadows and hover states, no image zoom animation yet */
+
+.quantity {
+  width: 125px;
+}
+
+.container {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  grid-gap: 15px;
+}
+
+.card-img-top {
+  width: 100%;
+  height: 15em;
+  object-fit: cover;
+}
+
+.figure {
+  float: right;
+}
+
+.card-img-wrapper {
+  overflow: hidden;
+}
+
+.discounted {
+  text-decoration: line-through;
+  font-style: italic;
+  color: red;
+  font-size: 80%;
+}
+
+.reduce-margin {
+  margin-left: -50px !important;
+}
+
+.center {
+  text-align: center !important;
+}

@@ -1,0 +1,67 @@
+/* Copyright (c) 2024-2026 Testsmith. All rights reserved. See LICENSE for details. */
+
+/* Sprint 2 - Header with brand colors */
+/* Colorful logo, no gear animation yet */
+
+.st0 { fill: #8DC12F; }
+.st1 { fill: #FFFFFF; }
+.st2 { fill: #9DC83D; }
+.st3 { fill: #1D6098; }
+.st4 { fill: #5A585D; }
+
+/* No gear animation in Sprint 2 */
+.gear {
+  transform-origin: 50% 50%;
+  transform-box: fill-box;
+}
+
+.badge {
+  padding-left: 9px;
+  padding-right: 9px;
+  border-radius: 9px;
+}
+
+.label-warning[href],
+.badge-warning[href] {
+  background-color: #c67605;
+}
+
+#lblCartCount {
+  font-size: 10px;
+  color: #fff;
+  vertical-align: top;
+  margin-left: -10px;
+  margin-top: -5px;
+}
+
+.dropdown-menu li {
+  position: relative;
+}
+
+.dropdown-menu .dropdown-submenu {
+  display: none;
+  position: absolute;
+  right: 100%;
+  top: -7px;
+}
+
+.dropdown-menu > li:hover > .dropdown-submenu {
+  display: block;
+}
+
+.accordion > ul {
+  display: none;
+}
+
+.accordion:hover ul {
+  display: block;
+}
+
+.btn-link-style {
+  background: none;
+  border: none;
+  text-decoration: none;
+  text-align: inherit;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}

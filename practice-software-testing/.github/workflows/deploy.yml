@@ -1,0 +1,77 @@
+name: deploy
+
+on:
+  workflow_run:
+    workflows: ["Run Playwright Tests 🎭"]
+    types:
+      - completed
+    branches: [main]
+
+concurrency: production_environment
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    strategy:
+      matrix:
+        sprint: [1, 2, 3, 4, 5, '5-with-bugs', '5-holtesting']
+    env:
+      NODE_VERSION: '22.17.0'
+      SECRET_GOOGLE_ID: ${{ matrix.sprint == '5' && secrets.SECRET_GOOGLE_ID || '' }}
+      SECRET_GOOGLE_SECRET: ${{ matrix.sprint == '5' && secrets.SECRET_GOOGLE_SECRET || '' }}
+      SECRET_GITHUB_ID: ${{ matrix.sprint == '5' && secrets.SECRET_GITHUB_ID || '' }}
+      SECRET_GITHUB_SECRET: ${{ matrix.sprint == '5' && secrets.SECRET_GITHUB_SECRET || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install (dev) Dependencies
+        run: |
+          cd sprint${{ matrix.sprint }}/API
+          composer update --no-progress --prefer-dist
+      - name: Run Laravel Tests
+        run: |
+          cd sprint${{ matrix.sprint }}/API
+          if [ "${{ matrix.sprint }}" = "5" ] || [ "${{ matrix.sprint }}" = "5-holtesting" ]; then
+            ./vendor/bin/pest
+          else
+            ./vendor/bin/phpunit
+          fi
+      - name: Run Angular Tests
+        run: |
+          cd sprint${{ matrix.sprint }}/UI
+          npm install --legacy-peer-deps
+          npm run test -- --watch=false --browsers=ChromeHeadless
+      - name: Install Dependencies
+        run: |
+          cd sprint${{ matrix.sprint }}/API
+          composer update --no-dev --prefer-dist --optimize-autoloader
+          composer dump-autoload -o
+      - name: Make envfile
+        uses: danielr1996/envsubst-action@1.0.0
+        env:
+          SECRET_DB: ${{ secrets.SECRET_DB }}
+          SECRET_DB_USER: ${{ secrets.SECRET_DB_USER }}
+          SECRET_DB_PASS: ${{ secrets.SECRET_DB_PASS }}
+          SECRET_GOOGLE_ID: ${{ env.SECRET_GOOGLE_ID }}
+          SECRET_GOOGLE_SECRET: ${{ env.SECRET_GOOGLE_SECRET }}
+          SECRET_GITHUB_ID: ${{ env.SECRET_GITHUB_ID }}
+          SECRET_GITHUB_SECRET: ${{ env.SECRET_GITHUB_SECRET }}
+        with:
+          input: sprint${{ matrix.sprint }}/API/.env_template
+          output: sprint${{ matrix.sprint }}/API/.env
+      - name: Deploy
+        uses: deployphp/action@v1.0.23
+        with:
+          private-key: ${{ secrets.PRIVATE_KEY }}
+          dep: deploy:sprint${{ matrix.sprint }} production
+          deployer-version: '7.4.0'

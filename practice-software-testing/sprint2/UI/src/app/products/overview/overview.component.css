@@ -1,0 +1,31 @@
+/* Copyright (c) 2024-2026 Testsmith. All rights reserved. See LICENSE for details. */
+
+/* Sprint 2 - Basic cards without images */
+/* Subtle card shadows, no hover effects yet */
+/* Slight rounding (0.25rem), moderate spacing */
+
+.container {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  grid-gap: 12px;
+}
+
+.card {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border-radius: 0.25rem;
+}
+
+.card-body {
+  padding: 0.85rem;
+}
+
+.card-footer {
+  padding: 0.6rem 0.85rem;
+}
+
+.discounted {
+  text-decoration: line-through;
+  font-style: italic;
+  color: red;
+  font-size: 80%;
+}

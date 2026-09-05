@@ -1,0 +1,37 @@
+<?php
+// Copyright (c) 2024-2026 Testsmith. All rights reserved.
+// See LICENSE for details.
+
+namespace App\Http\Requests\Product;
+
+use App\Http\Requests\BaseFormRequest;
+
+class UpdateProduct extends BaseFormRequest
+{
+    /**
+     * Determine if the user is authorized to make this request.
+     *
+     * @return bool
+     */
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    /**
+     * Get the validation rules that apply to the request.
+     *
+     * @return array
+     */
+    public function rules(): array
+    {
+        return [
+            'name' => 'required|string|max:120',
+            'description' => 'nullable|string|max:1250',
+            'price' => 'required|numeric',
+            'category_id' => ['required', 'integer', 'exists:categories,id'],
+            'brand_id' => ['required', 'integer', 'exists:brands,id'],
+            'product_image_id' => ['required', 'integer', 'exists:product_images,id'],
+        ];
+    }
+}

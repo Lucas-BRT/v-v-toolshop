@@ -1,0 +1,135 @@
+<!-- Copyright (c) 2024-2026 Testsmith. All rights reserved. -->
+<!-- See LICENSE for details. -->
+
+<div class="row">
+  <h2 data-test="page-title" [ngClass]="{'text-center': browserDetect.isEdge()}">
+  Category: {{slug.replace('-', ' ') | titlecase}}</h2>
+</div>
+<div class="row my-4">
+  <div data-test="filters" class="collapse d-md-block col-md-3 mb-3">
+    <h4 class="grid-title"><i class="fa fa-arrows-up-down"></i> Sort</h4>
+    <hr>
+      <form autocomplete=off>
+        <div class="input-group mb-3">
+          <select data-test="sort" (change)="changeSorting($event)" class="form-select">
+            <option value=""></option>
+            <option value="name,desc">Name (A - Z)</option>
+            <option value="name,asc">Name (Z - A)</option>
+            <option value="price,asc">Price (High - Low)</option>
+            <option value="price,desc">Price (Low - High)</option>
+            @if (isCo2ScaleEnabled()) {
+              <option value="co2_rating,asc">CO₂ Rating (Best First)</option>
+              <option value="co2_rating,desc">CO₂ Rating (Worst First)</option>
+            }
+          </select>
+        </div>
+      </form>
+
+      <h4 class="grid-title"><i class="fa fa-filter"></i> Filters</h4>
+      <hr>
+        <h4>By category:</h4>
+        <ng-template #recursiveList let-list>
+          @for (category of list; track category) {
+            <div class="checkbox">
+              <label>@if (category.parent_id) {
+                <input type="checkbox" class="icheck"
+                  attr.data-test="category-{{category.id}}" name="category_id"
+                  value="{{category.id}}" (change)="filterByCategory($event)"/>
+              }
+            {{category.name}}</label>
+            @if (category.sub_categories.length > 0) {
+              <ul>
+                <ng-container
+                *ngTemplateOutlet="recursiveList; context:{ $implicit: category.sub_categories }"></ng-container>
+              </ul>
+            }
+          </div>
+        }
+      </ng-template>
+      <ng-container *ngTemplateOutlet="recursiveList; context:{ $implicit: categories }"></ng-container>
+
+      <div class="py-2"></div>
+
+      <h4>By brand:</h4>
+      @for (brand of brands; track brand) {
+        <div class="checkbox">
+          <label><input type="checkbox" class="icheck" attr.data-test="brand-{{brand.id}}" name="brand_id"
+            value="{{brand.id}}"
+            (change)="filterByBrand($event)"/> <!--(change)="filterByMediatype($event)"--> {{brand.name}}
+          </label>
+        </div>
+      }
+
+      <div class="py-2"></div>
+
+      @if (isCo2ScaleEnabled()) {
+        <h4>Sustainability:</h4>
+        <div class="checkbox">
+          <label><input type="checkbox" class="icheck" name="eco_friendly" data-test="eco-friendly-filter"
+                        (change)="filterByEcoFriendly($event)"/>
+            Show only eco-friendly products
+          </label>
+        </div>
+      }
+
+    </div>
+    <div class="col-md-9">
+      <a class="btn btn-secondary d-block d-md-none btn-block mb-3" data-bs-toggle="collapse" data-test="filters"
+        href="#filters"
+        role="button" aria-expanded="false" aria-controls="collapseExample">
+        <i class="fa fa-filter"></i> Filters
+      </a>
+      @if (results) {
+        <div class="container" attr.data-test="{{resultState}}">
+          @for (item of results.data  | paginate: { itemsPerPage: results.per_page, currentPage: p, totalItems: results.total }; track item) {
+            <a attr.data-test="product-{{item.id}}" routerLink="/product/{{item.id}}"
+              class="card" style="text-decoration: none; color: black;">
+              <div class="card-img-wrapper">
+                <img class="card-img-top"
+                  loading="lazy"
+                  src="assets/img/products/{{item.product_image.file_name}}">
+                @if (item.is_eco_friendly && isEcoBadgeEnabled()) {
+                  <span class="eco-badge position-absolute top-0 end-0 m-2" data-test="eco-badge">
+                    ECO
+                  </span>
+                }
+                </div>
+                <div class="card-body">
+                  <h5 data-test="product-name" class="card-title"
+                    [ngClass]="{'text-nowrap': browserDetect.isFirefox(), 'text-end': Math.floor(Math.random() * 100) % 2}">
+                  {{item.name}}
+                </h5>
+                @if (item.co2_rating && isCo2ScaleEnabled()) {
+                  <div class="co2-rating-scale"
+                       title="Environmental impact rating (A=lowest, E=highest)"
+                       data-test="co2-rating-badge">
+                    <span class="co2-letter" [class.active]="item.co2_rating === 'A'" [class.rating-a]="item.co2_rating === 'A'">A</span>
+                    <span class="co2-letter" [class.active]="item.co2_rating === 'B'" [class.rating-b]="item.co2_rating === 'B'">B</span>
+                    <span class="co2-letter" [class.active]="item.co2_rating === 'C'" [class.rating-c]="item.co2_rating === 'C'">C</span>
+                    <span class="co2-letter" [class.active]="item.co2_rating === 'D'" [class.rating-d]="item.co2_rating === 'D'">D</span>
+                    <span class="co2-letter" [class.active]="item.co2_rating === 'E'" [class.rating-e]="item.co2_rating === 'E'">E</span>
+                  </div>
+                }
+              </div>
+              <div class="card-footer">
+                @if (item.stock <= 0) {
+                  <span class="float-start text-danger" data-test="out-of-stock">Out of stock</span>
+                }
+                <span class="float-end text-muted">
+                  <span data-test="product-price"
+                  [ngClass]="{'discounted' : item.discount_price}">${{item.price}}</span> @if (item.discount_price) {
+                  <span
+                  data-test="product-discount-price"> ${{item.discount_price}}</span>
+                }
+              </span>
+            </div>
+          </a>
+        }
+      </div>
+    }
+    <div class="mt-3">
+      <pagination-controls [autoHide]="true" [responsive]="true"
+      (pageChange)="handlePageChange($event)"></pagination-controls>
+    </div>
+  </div>
+</div>

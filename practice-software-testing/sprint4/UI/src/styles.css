@@ -1,0 +1,94 @@
+/* Copyright (c) 2024-2026 Testsmith. All rights reserved. See LICENSE for details. */
+
+/* Sprint 4 - Full design with animations */
+/* Shadows, hover effects, smooth transitions */
+/* Full rounding (1rem), generous spacing */
+
+html, body {
+  height: 100%;
+  scroll-behavior: auto !important;
+}
+
+.auth-container {
+  margin-top: 5%;
+  margin-bottom: 5%;
+}
+
+.auth-form {
+  padding: 3%;
+  box-shadow: 0 5px 8px 0 rgba(0, 0, 0, 0.2), 0 9px 26px 0 rgba(0, 0, 0, 0.19);
+  border-radius: 0.75rem;
+}
+
+.auth-form h3 {
+  text-align: center;
+  color: #333;
+}
+
+.auth-container form {
+  padding: 3% 10%;
+}
+
+.btnSubmit {
+  width: 50%;
+  border-radius: 1rem;
+  padding: 1.5%;
+  border: none;
+  cursor: pointer;
+}
+
+.auth-form .btnSubmit {
+  font-weight: 600;
+  color: #fff;
+  background-color: #1E6098;
+  transition: background-color 0.2s ease;
+}
+
+.auth-form .btnSubmit:hover {
+  background-color: #175a8a;
+}
+
+.auth-form .ForgetPwd {
+  color: #1E6098;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.alert {
+  margin-bottom: 0.5rem;
+}
+
+/* Chrome, Safari, Edge, Opera */
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Firefox */
+input[type=number] {
+  -moz-appearance: textfield;
+}
+
+a {
+  color: #0000cc;
+}
+
+.text-muted {
+  color: #555f6a !important;
+}
+
+.btn-link-style {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn-link-style:hover,
+.btn-link-style:focus {
+  text-decoration: underline;
+}

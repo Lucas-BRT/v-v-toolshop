@@ -1,0 +1,74 @@
+// Copyright (c) 2024-2026 Testsmith. All rights reserved.
+// See LICENSE for details.
+
+import {inject, Injectable} from '@angular/core';
+import {HttpClient, HttpErrorResponse} from '@angular/common/http';
+import {Observable, throwError} from 'rxjs';
+import {catchError, shareReplay} from 'rxjs/operators';
+import {environment} from '../../environments/environment';
+import {Brand} from '../models/brand';
+
+@Injectable({
+  providedIn: 'root'
+})
+export class BrandService {
+  private readonly httpClient = inject(HttpClient);
+  private readonly apiURL = `${environment.apiUrl}/brands`;
+  private brands$: Observable<Brand[]> | null = null;
+
+  searchBrands(query: string): Observable<Brand[]> {
+    return this.httpClient.request<Brand[]>('QUERY', `${this.apiURL}/search`, {
+      body: { q: query },
+      headers: { 'Content-Type': 'application/json' },
+    }).pipe(catchError(this.handleError));
+  }
+
+  getBrands(): Observable<Brand[]> {
+    if (!this.brands$) {
+      this.brands$ = this.httpClient.get<Brand[]>(this.apiURL)
+        .pipe(
+          shareReplay(1),
+          catchError(this.handleError)
+        );
+    }
+    return this.brands$;
+  }
+
+  invalidateBrandsCache(): void {
+    this.brands$ = null;
+  }
+
+  getById(id: string): Observable<Brand> {
+    return this.httpClient.get<Brand>(`${this.apiURL}/${id}`)
+      .pipe(catchError(this.handleError));
+  }
+
+  create(brand: Brand): Observable<Brand> {
+    this.invalidateBrandsCache();
+    return this.httpClient.post<Brand>(this.apiURL, brand)
+      .pipe(catchError(this.handleError));
+  }
+
+  update(id: string, brand: Brand): Observable<Brand> {
+    this.invalidateBrandsCache();
+    return this.httpClient.put<Brand>(`${this.apiURL}/${id}`, brand)
+      .pipe(catchError(this.handleError));
+  }
+
+  delete(id: string): Observable<void> {
+    this.invalidateBrandsCache();
+    return this.httpClient.delete<void>(`${this.apiURL}/${id}`)
+      .pipe(catchError(this.handleError));
+  }
+
+  private handleError = (error: HttpErrorResponse): Observable<never> => {
+    console.error('BrandService Error:', error);
+
+    // Return user-friendly error message
+    const errorMessage = error.error?.message ||
+      error.message ||
+      'An unexpected error occurred';
+
+    return throwError(() => new Error(errorMessage));
+  };
+}
