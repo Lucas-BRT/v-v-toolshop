@@ -1,0 +1,68 @@
+# 12 - Pico repentino de trafego (spike test).
+#
+# ESTE E O CENARIO QUE JUSTIFICA O ARTILLERY.
+#
+# O Locust trabalha com usuarios simultaneos (modelo fechado): se a API fica
+# lenta, cada usuario espera a resposta antes da proxima acao, entao a taxa
+# de requisicoes cai sozinha. A carga se autolimita e a fila nunca cresce.
+# Por construcao o modelo fechado NAO consegue reproduzir o cenario abaixo.
+#
+# O Artillery trabalha com taxa de chegada (modelo aberto): a cada segundo
+# entram N usuarios novos, respondendo a API rapido ou nao. Se o servico
+# desacelera, a fila cresce — e e isso que acontece numa promocao ou numa
+# citacao em rede social.
+#
+# ALVO: /users/login, nao o catalogo.
+# A versao anterior deste cenario batia em /products e /categories/tree e
+# media p95 estavel de ~27 ms de 8 a 80 chegadas/s, com zero falhas: o
+# catalogo responde do cache (Cache-Control: max-age=120), entao o teste
+# media o cache e o pico era invisivel. O login roda bcrypt por requisicao,
+# nao e cacheavel, e e onde a fila realmente se forma.
+#
+# JOELHO DA CURVA (medido nesta stack, docker local):
+#     60 chegadas/s  -> p50   66 ms, p95    86 ms, 0 erros
+#    100 chegadas/s  -> p50  963 ms, p95  1686 ms
+#    200 chegadas/s  -> p50 6702 ms, p95  9230 ms
+#    400 chegadas/s  -> p50 18.2  s, p95  19.7  s, timeouts e HTTP 500
+#
+# As fases abaixo cruzam esse joelho de proposito: a subida vai a 150, bem
+# acima da capacidade, e a fase final volta ao normal para medir quanto
+# tempo o servico leva para se recuperar depois que a fila drena.
+#
+# O cenario NAO tem "ensure": ele deve terminar com metricas ruins. O
+# objetivo e ver a degradacao, nao aprovar ou barrar.
+config:
+  target: "http://localhost:8091"
+
+  # Sem timeout generoso o Artillery corta a requisicao antes de a fila
+  # aparecer no grafico, e a degradacao vira "erro de rede" em vez de
+  # latencia — que e justamente o dado que queremos ver.
+  http:
+    timeout: 30
+
+  phases:
+    - duration: 20
+      arrivalRate: 5
+      name: "Linha de base"
+
+    - duration: 15
+      arrivalRate: 5
+      rampTo: 150
+      name: "Subida do pico"
+
+    - duration: 30
+      arrivalRate: 150
+      name: "Pico sustentado"
+
+    - duration: 40
+      arrivalRate: 5
+      name: "Recuperacao"
+
+scenarios:
+  - name: "Login sob pico"
+    flow:
+      - post:
+          url: "/users/login"
+          json:
+            email: "admin@practicesoftwaretesting.com"
+            password: "welcome01"

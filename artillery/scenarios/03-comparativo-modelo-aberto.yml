@@ -1,0 +1,76 @@
+# 15 - Carga pareada com o Locust — modelo aberto.
+#
+# Este arquivo e metade de um experimento. A outra metade e
+# `../locust/scenarios/comparativo.py`. Os dois aplicam EXATAMENTE a mesma
+# carga oferecida sobre EXATAMENTE as mesmas rotas, pela mesma duracao. A
+# unica variavel do experimento e o modelo de carga.
+#
+# COMO OS DOIS LADOS FORAM PAREADOS
+# As ferramentas configuram unidades diferentes: aqui sao chegadas por
+# segundo, la sao usuarios simultaneos. Comparar "150 chegadas/s" com "150
+# usuarios" nao provaria nada. O pareamento e feito no lado do Locust, com
+# `constant_throughput(1)`: 150 usuarios tentando 1 jornada por segundo cada
+# oferecem 150 jornadas/s — o mesmo que o `arrivalRate: 150` abaixo.
+#
+# POR QUE 150
+# A jornada faz um login, que roda bcrypt e nao e cacheavel. Esta stack
+# satura o login perto de 80 req/s (medido: 60/s -> p95 86 ms; 100/s -> p95
+# 1686 ms). 150 e quase o dobro da capacidade, entao os dois modelos sao
+# submetidos ao mesmo excesso — e e ai que eles divergem.
+#
+# O QUE OBSERVAR
+#   MODELO ABERTO (aqui)
+#     As 150 chegadas/s entram sendo a API capaz ou nao. O excedente vira
+#     fila, a fila cresce a cada segundo e o tempo de resposta sobe sem teto
+#     ate estourar em timeout. O numero final nao e a capacidade da API: e o
+#     que o usuario sente quando a demanda passa da capacidade.
+#
+#   MODELO FECHADO (Locust)
+#     Cada usuario espera a resposta antes da proxima jornada, entao a taxa
+#     real cai sozinha e existem no maximo 150 requisicoes em voo. O RPS
+#     achata num teto e o tempo de resposta para de crescer. Esse teto e a
+#     capacidade da API.
+#
+# Nenhum dos dois substitui o outro: um responde "qual e a minha capacidade",
+# o outro responde "o que acontece quando ela e ultrapassada".
+#
+# Sem "ensure": o cenario deve terminar com metricas ruins, e isso e o
+# resultado esperado.
+#
+# Rodar os dois lados (comandos completos em ../RUN.md):
+#     npx artillery run scenarios/03-comparativo-modelo-aberto.yml
+#     cd ../locust && locust -f locustfile-comparativo.py \
+#         --users 150 --spawn-rate 150 --run-time 60s --headless
+config:
+  target: "http://localhost:8091"
+
+  # Timeout generoso: com um valor curto a fila viraria "erro de rede" no
+  # relatorio em vez de latencia, e a latencia e justamente o dado.
+  http:
+    timeout: 30
+
+  phases:
+    - duration: 15
+      arrivalRate: 5
+      name: "Aquecimento"
+
+    - duration: 60
+      arrivalRate: 150
+      name: "Carga pareada"
+
+scenarios:
+  - name: "Login e leitura autenticada"
+    flow:
+      - post:
+          url: "/users/login"
+          json:
+            email: "admin@practicesoftwaretesting.com"
+            password: "welcome01"
+          capture:
+            - json: "$.access_token"
+              as: "token"
+
+      - get:
+          url: "/users/me"
+          headers:
+            Authorization: "Bearer {{ token }}"

@@ -1,0 +1,75 @@
+# 14 - Portão de qualidade para pipeline (CI).
+#
+# Junta tudo o que os testes anteriores mostram separado, com um objetivo
+# diferente: não é para olhar gráfico, é para o pipeline aprovar ou barrar
+# o deploy sozinho.
+#
+#   - "expect"  garante que as respostas continuam corretas sob carga;
+#   - "ensure"  compara latência e taxa de erro com o SLA acordado.
+#
+# Se qualquer limite estourar, o Artillery sai com exit code != 0 e o build
+# quebra. Rodar com: npx artillery run scenarios/02-portao-ci.yml ; echo $?
+#
+# Baseline medido nesta stack: p95 62 ms, p99 78 ms com a mistura abaixo
+# (7 partes catalogo cacheado, 3 partes login com bcrypt). O login domina o
+# percentil alto. Os limites sao esse baseline com ~1.6x de folga.
+#
+# Para ver o portao fechar de verdade na apresentacao: rode o cenario
+# 01-pico-de-trafego (pico no login) em outro terminal e dispare este durante
+# o pico sustentado — a fila do login estoura o p95 e o exit code vira != 0.
+config:
+  target: "http://localhost:8091"
+
+  phases:
+    - duration: 15
+      arrivalRate: 3
+      name: "Aquecimento"
+    - duration: 60
+      arrivalRate: 8
+      name: "Carga de referência"
+
+  plugins:
+    expect: {}
+    ensure: {}
+
+  ensure:
+    # Menos de 1% das requisições podem falhar.
+    maxErrorRate: 1
+    thresholds:
+      - "http.response_time.p95": 120
+      - "http.response_time.p99": 200
+
+scenarios:
+  - name: "Catálogo"
+    weight: 7
+    flow:
+      - get:
+          url: "/products"
+          expect:
+            - statusCode: 200
+            - hasProperty: "data"
+      - get:
+          url: "/brands"
+          expect:
+            - statusCode: 200
+
+  - name: "Autenticação"
+    weight: 3
+    flow:
+      - post:
+          url: "/users/login"
+          json:
+            email: "customer@practicesoftwaretesting.com"
+            password: "welcome01"
+          capture:
+            - json: "$.access_token"
+              as: "token"
+          expect:
+            - statusCode: 200
+            - hasProperty: "access_token"
+      - get:
+          url: "/users/me"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          expect:
+            - statusCode: 200

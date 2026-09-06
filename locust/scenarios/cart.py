@@ -21,7 +21,11 @@ class CartUser(HttpUser):
 
     def on_start(self):
         self.cart_id = None
-        self.items: list[str] = []
+        # Conjunto, nao lista: sortear o mesmo produto duas vezes empilhava
+        # uma duplicata, e o remove_item seguinte apagava o item do carrinho
+        # deixando a copia aqui — o update_quantity depois batia em 400 num
+        # produto que ja nao existia mais no carrinho.
+        self.items: set[str] = set()
         self.create_cart()
 
     def create_cart(self):
@@ -30,7 +34,7 @@ class CartUser(HttpUser):
                 response.failure(f"criacao de carrinho falhou: HTTP {response.status_code}")
                 return
             self.cart_id = response.json().get("id")
-            self.items = []
+            self.items = set()
             if not self.cart_id:
                 response.failure("resposta de /carts sem id")
 
@@ -59,7 +63,7 @@ class CartUser(HttpUser):
             if response.status_code != 200:
                 response.failure(f"add item falhou: HTTP {response.status_code}")
                 return
-            self.items.append(product_id)
+            self.items.add(product_id)
 
     @task(4)
     def read_cart(self):
@@ -72,20 +76,31 @@ class CartUser(HttpUser):
         if not self.cart_id or not self.items:
             return
         payload = {
-            "product_id": random.choice(self.items),
+            "product_id": random.choice(sorted(self.items)),
             "quantity": random.randint(1, 5),
         }
-        self.client.put(
+        with self.client.put(
             f"/carts/{self.cart_id}/product/quantity",
             json=payload,
             name="PUT /carts/{id}/product/quantity",
-        )
+            catch_response=True,
+        ) as response:
+            if response.status_code == 400 and "Thor Hammer" in response.text:
+                # Mesma regra de negocio ja tratada no add_item: no maximo um
+                # Thor Hammer por carrinho, entao quantity > 1 e recusada
+                # (CartService.php:117). E resposta esperada, nao falha de
+                # carga. Sem isso o cenario acusava ~0,3% de erro que nao
+                # existia.
+                response.success()
+                return
+            if response.status_code != 200:
+                response.failure(f"update quantity falhou: HTTP {response.status_code}")
 
     @task(1)
     def remove_item(self):
         if not self.cart_id or not self.items:
             return
-        product_id = self.items.pop()
+        product_id = self.items.pop()  # set.pop(): remove um elemento qualquer
         self.client.delete(
             f"/carts/{self.cart_id}/product/{product_id}",
             name="DELETE /carts/{id}/product/{productId}",

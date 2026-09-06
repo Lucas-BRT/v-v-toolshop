@@ -9,14 +9,11 @@ import os
 # Host padrao da API (docker-compose expoe o web server em 8091).
 API_HOST = os.getenv("TOOLSHOP_API_HOST", "http://localhost:8091")
 
-# Host da UI Angular, usado apenas pelo cenario de front-end.
-UI_HOST = os.getenv("TOOLSHOP_UI_HOST", "http://localhost:4200")
-
 # Usuarios semeados por database/seeders/UserSeeder.php.
-CUSTOMER_EMAIL = os.getenv("TOOLSHOP_CUSTOMER_EMAIL", "customer@practicesoftwaretesting.com")
+CUSTOMER_EMAIL = os.getenv(
+    "TOOLSHOP_CUSTOMER_EMAIL", "customer@practicesoftwaretesting.com"
+)
 CUSTOMER_PASSWORD = os.getenv("TOOLSHOP_CUSTOMER_PASSWORD", "welcome01")
-ADMIN_EMAIL = os.getenv("TOOLSHOP_ADMIN_EMAIL", "admin@practicesoftwaretesting.com")
-ADMIN_PASSWORD = os.getenv("TOOLSHOP_ADMIN_PASSWORD", "welcome01")
 
 # O JWT emitido pela API expira em 300s; renovamos antes disso.
 TOKEN_TTL_SECONDS = int(os.getenv("TOOLSHOP_TOKEN_TTL", "240"))

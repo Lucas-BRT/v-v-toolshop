@@ -9,9 +9,9 @@ import logging
 import random
 
 import requests
-from locust import events
 
 from common import config
+from locust import events
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,14 @@ def load_catalog(environment, **kwargs):
     except Exception as exc:  # pragma: no cover - depende do ambiente
         logger.error("Falha ao carregar catalogo de %s: %s", config.API_HOST, exc)
         logger.error("A API esta no ar? Suba com: docker compose up -d")
+        # Sem encerrar o runner o teste seguiria adiante com o catalogo
+        # vazio: as tasks que dependem de um id real fazem `return` cedo e
+        # nao geram requisicao nenhuma, entao o relatorio sai limpo, com
+        # menos requisicoes e zero falhas — um resultado bonito e falso.
+        # Um `raise` aqui nao basta: o Locust captura a excecao do event
+        # handler, registra e continua. Pedir o quit e o que de fato para.
+        if environment.runner is not None:
+            environment.runner.quit()
         raise
 
     logger.info(

@@ -1,0 +1,9 @@
+{
+  "name": "toolshop-artillery",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Testes de carga e contrato do Toolshop com Artillery",
+  "devDependencies": {
+    "artillery": "^2.0.24"
+  }
+}

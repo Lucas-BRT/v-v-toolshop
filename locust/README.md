@@ -1,130 +1,208 @@
-# Testes de carga — Locust
+# Locust
 
-Suite de performance contra a API do Toolshop (`practice-software-testing`).
+Ferramenta de teste de carga onde **o teste é código Python**. Não há DSL,
+nem YAML, nem gravador de tráfego: um usuário virtual é uma classe, e cada
+ação dele é um método decorado com `@task`.
 
-## Pre-requisitos
+Comandos para executar: [`../RUN.md`](../RUN.md).
+Catálogo com durações e números esperados: [`../CENÁRIOS_DE_TESTE.md`](../CENÁRIOS_DE_TESTE.md).
+Material de apresentação: [`APRESENTACAO.md`](APRESENTACAO.md).
 
-A stack precisa estar no ar:
+---
 
-```bash
-cd ../practice-software-testing && docker compose up -d
+## Para que serve
+
+Responder **"quantos usuários simultâneos o sistema aguenta antes de
+degradar?"** — e, no caminho, expor defeitos que só aparecem quando muita
+gente usa o sistema ao mesmo tempo.
+
+A resposta vem do **modelo fechado**, que é a decisão de projeto da qual
+tudo o mais decorre. Você configura usuários simultâneos, não requisições
+por segundo. Cada usuário virtual é um laço:
+
+```
+faz requisição → ESPERA A RESPOSTA → pensa um pouco → repete
 ```
 
-A API responde em `http://localhost:8091` (o `web` do compose) e a UI Angular em `http://localhost:4200`.
+O "espera a resposta" é a peça toda. Se a API fica lenta, o usuário demora
+mais para dar a volta no laço, e ninguém empurra requisições novas enquanto
+isso. Existem no máximo N requisições em voo, porque existem N usuários.
 
-O `run-locust.sh` cria o virtualenv e instala as dependencias sozinho na primeira execucao — nao ha passo manual de setup.
+| | Consequência |
+|---|---|
+| Se a API desacelera | a taxa de requisições **cai sozinha** |
+| Fila | não se forma — não há como |
+| Latência | encontra um teto |
+| O número que sai | é a **capacidade** do sistema |
 
-## Como rodar
+Como o teste é código, o usuário virtual carrega **estado**: o objeto vive
+durante toda a execução e guarda carrinho, token, histórico — como uma
+sessão real. É o que permite caçar defeitos de sequência, não só de volume.
 
-O teste e disparado pela CLI, mas a interface web do Locust sobe junto em
-`http://localhost:8089` com as metricas ao vivo — graficos de RPS, tempo de
-resposta e usuarios ativos. A interface continua no ar depois que o teste
-termina, entao da para navegar pelos numeros com calma (bom para apresentar).
+---
 
-```bash
-./run-locust.sh smoke           # 5 usuarios, 30s
-./run-locust.sh load            # 50 usuarios, 3m
-./run-locust.sh stress          # 200 usuarios, 5m
-```
+## Que problemas esta ferramenta procura
 
-Encerre com `Ctrl+C` quando terminar de olhar os graficos.
+### Encontra
 
-Segundo argumento escolhe o cenario:
+| Problema | Como aparece |
+|---|---|
+| **Capacidade desconhecida** | o RPS achata num teto enquanto a latência assume o crescimento |
+| **Defeito de estado de sessão** | carrinho perdido, token expirado no meio, sequência inválida de operações |
+| **Regra de negócio disparando sob concorrência** | erro que o teste sem estado nunca provoca |
+| **Degradação lenta** | patamar alto sustentado revela vazamento de memória, pool esgotando, cache envenenando |
+| **Rota cara escondida na média** | agrupar requisições por nome expõe qual endpoint carrega o percentil alto |
+| **Regra de negócio que só quebra sob concorrência** | vários usuários disputando o mesmo recurso expõem a falta de checagem, transação ou lock |
 
-```bash
-./run-locust.sh smoke browse    # so navegacao
-./run-locust.sh load cart       # so carrinho
-./run-locust.sh load auth       # so area logada
-./run-locust.sh load all        # mistura por peso (default)
-```
+### Não encontra — por construção
 
-Sem argumento nenhum, a interface sobe vazia e o teste e configurado na
-propria tela — o `--class-picker` deixa escolher o cenario por la:
+| Problema | Por quê |
+|---|---|
+| **Formação de fila** | impossível no modelo fechado: a carga se autolimita |
+| **Tempo de recuperação após pico** | idem — nunca há fila para drenar |
+| **Regressão de SLA em pipeline** | `--exit-code-on-error` reage a *erros*, não a *latência*; não existe `assert p95 < X` pronto |
+| **Quebra de contrato sob carga** | `catch_response` permite validar corpo, mas é manual — não há validação declarativa de schema |
 
-```bash
-./run-locust.sh                 # UI em http://localhost:8089, disparo manual
-```
+Essas quatro lacunas são exatamente o que a suite `../artillery` cobre.
 
-Para CI ou terminal puro, sem interface:
+---
 
-```bash
-HEADLESS=1 ./run-locust.sh load       # so o resumo no terminal
-AUTOQUIT=0 ./run-locust.sh load       # com UI, mas encerra ao fim do teste
-```
+## Os casos de teste
 
-Tudo depois de `--` vai direto para o `locust`:
+### `BrowseUser` — leitura anônima (peso 6)
 
-```bash
-./run-locust.sh load all -- --csv-full-history
-```
+Catálogo paginado, busca, detalhe do produto, relacionados, specs, filtro
+por categoria e por marca, árvore de categorias, marcas.
 
-### Relatorios
+**Que problema procura:** o caminho de maior volume de uma loja é leitura
+anônima. Se o cache não estiver absorvendo, se a paginação fizer varredura,
+se um filtro estiver sem índice ou se a árvore de categorias montar em N+1
+consultas, é aqui que aparece — e aparece cedo, porque este perfil concentra
+a maior parte do tráfego.
 
-Os CSVs em `reports/` sao escritos durante a execucao. O HTML e gravado no
-momento em que o processo encerra — ou seja, depois do `Ctrl+C` (ou na hora,
-se usar `HEADLESS=1` / `AUTOQUIT=0`). A pasta e ignorada pelo git.
+### `CartUser` — escrita com estado (peso 3)
 
-### Variaveis de ambiente
+Cria carrinho, adiciona item, lê, altera quantidade, remove item, descarta e
+recomeça.
 
-| Variavel | Default | Para que serve |
-|---|---|---|
-| `TOOLSHOP_API_HOST` | `http://localhost:8091` | apontar para outro ambiente |
-| `WEB_PORT` | `8089` | porta da interface web |
-| `HEADLESS` | — | `1` roda sem interface (CI) |
-| `AUTOQUIT` | — | segundos ate encerrar o processo apos o teste |
-| `USERS` / `SPAWN_RATE` / `RUN_TIME` | vem do perfil | sobrescrever o perfil escolhido |
-| `TOOLSHOP_CUSTOMER_EMAIL` / `_PASSWORD` | usuario semeado | trocar as credenciais do cenario logado |
-| `TOOLSHOP_CATALOG_PAGES` | `2` | quantas paginas de produto pre-carregar |
+**Que problema procura:** é o caminho que mais toca o banco e o único com
+estado de verdade. Procura corrupção de estado sob concorrência, carrinho
+perdido entre operações, regra de negócio recusando o que deveria aceitar, e
+degradação de escrita que a leitura cacheada esconderia.
 
-## Cenarios
+### `AuthenticatedUser` — área logada (peso 2)
 
-| Classe | Peso | O que exercita |
-|---|---|---|
-| `BrowseUser` | 6 | catalogo paginado, busca, detalhe do produto, relacionados, specs, filtro por categoria e marca, arvore de categorias, marcas |
-| `CartUser` | 3 | criar carrinho, adicionar item, ler, alterar quantidade, remover item, descartar carrinho |
-| `AuthenticatedUser` | 2 | login, `/users/me`, favoritos, faturas, relogin periodico |
+Login, `/users/me`, favoritos, faturas, e relogin periódico.
 
-Os pesos aproximam o trafego de uma loja: muita leitura anonima, menos escrita, minoria autenticada.
+**Que problema procura:** o login roda bcrypt, que é caro **de propósito** —
+é assim que ele protege a senha. Não é cacheável e consome CPU por
+requisição. Este perfil procura o ponto em que o hash de senha satura o
+processador antes de qualquer outra coisa, e verifica se as rotas
+autenticadas continuam respondendo quando isso acontece.
 
-## Decisoes de implementacao
+O peso 2 é deliberado: em uma loja, a fatia logada é minoria do tráfego. Os
+pesos 6/3/2 aproximam essa proporção — confira com `locust --show-task-ratio`.
 
-- **Catalogo pre-carregado** (`common/catalog.py`): ids reais de produto, categoria e marca sao buscados uma vez no `test_start`. Se cada task descobrisse o id na hora, cada acao custaria uma requisicao extra e as metricas ficariam infladas.
-- **Nomes de request agrupados**: rotas com id usam `name="GET /products/{id}"`. Sem isso o relatorio viraria uma linha por id.
-- **Token renovado sozinho** (`common/auth.py`): o JWT da API expira em 300s. O mixin renova aos 240s e tambem refaz login se o token sumir.
-- **Regra do Thor Hammer tratada como esperada**: `POST /carts/{id}` devolve `400 You can only have one Thor Hammer in the cart.` — e regra de negocio da loja, nao falha de carga, entao e marcada como sucesso para nao poluir a taxa de erro.
-- **Carrinho perdido e recriado**: um `404` no add item (restart da API, `POST /refresh` no banco) faz o usuario virtual criar outro carrinho em vez de falhar em cascata.
+### Rampa escalonada (`shapes/degraus.py`)
 
-## Resultado da execucao inicial
+Sobe os usuários simultâneos em degraus de 10 a 400, mantendo cada degrau
+tempo suficiente para estabilizar.
 
-Ambiente local, sprint5, stack em Docker.
+**Que problema procura:** *não saber a capacidade*. Um patamar fixo diz se
+o sistema aguenta aquele patamar; não diz onde ele para de aguentar.
+Enquanto há folga, dobrar os usuários dobra o RPS e a latência quase não se
+move. **O joelho é onde o RPS achata e a latência assume o crescimento** —
+esse teto é a capacidade, e é o número que dimensiona infraestrutura.
 
-`./run-locust.sh smoke` — 5 usuarios, 30s: 54 requisicoes, **0 falhas**, mediana 12 ms, p95 27 ms.
+Precisa de uma `LoadTestShape` porque `--users` define um único patamar;
+varrer vários na mesma execução, com o mesmo processo e o mesmo estado de
+usuário virtual, não tem outro jeito.
 
-Mistura completa, 15 usuarios, 25s: 141 requisicoes, **0 falhas**, mediana 12 ms, p95 98 ms, max 134 ms.
+### `EstoqueUser` — sobrevenda sob concorrência
 
-Pontos mais caros ja nessa carga baixa:
+Vários clientes comprando o **mesmo** produto ao mesmo tempo, somando mais
+unidades do que existem em estoque.
 
-- `POST /users/login` — p50 93 ms. Custo do bcrypt, esperado.
-- `POST /carts` — p50 100 ms.
-- `GET /products/{id}/related` e `GET /products?page=N` — p90 ~120 ms; o resto do catalogo fica em ~10 ms porque a API cacheia as listagens.
+**Que problema procura:** *a aplicação aceitar vender o que não tem.* É o
+único caso da suite que não mede desempenho — ele usa a carga como
+ferramenta para provocar uma condição de corrida e verificar uma regra de
+negócio sob concorrência. O tempo de resposta é irrelevante aqui; o que
+importa é quantas unidades a API aceitou.
 
-Ou seja: leitura de catalogo esta barata (cache), escrita e autenticacao sao as candidatas a gargalo. Subir para o perfil `stress` e o proximo passo para achar o joelho da curva.
+O oráculo compara **unidades aceitas em pedidos** com o **estoque inicial**.
+O critério não depende de o estoque ser debitado: aceitar o pedido já é o
+defeito. Um 422 recusando por falta de estoque conta como sucesso — é o
+comportamento correto, e é justamente o que não acontece.
+
+**Defeito confirmado.** 20 usuários × 5 unidades contra um estoque de 25:
+os 20 pedidos foram aceitos, nenhum recusado, sobrevenda de 75 unidades.
+Processando a fila em seguida, o estoque foi para **−75**. Causas:
+
+- não há checagem de estoque em lugar nenhum do fluxo. O `CartService`
+  valida a regra do Thor Hammer e o teto de 99 por requisição, mas nunca o
+  estoque; o `InvoiceService` monta a fatura sem consultar `products.stock`;
+- o débito vive em `App\Jobs\UpdateProductInventory`, que faz
+  `$product->decrement('stock', $quantity)` sem `where('stock', '>=', ...)`,
+  sem transação e sem lock. O `decrement` é atômico no SQL, então não há
+  *lost update* — mas nada impede o estoque de ficar negativo;
+- o job é enfileirado e o `docker-compose` não sobe worker nenhum, então os
+  débitos se acumulam na tabela `jobs` e o estoque parece intacto. Isso
+  **esconde o defeito** de quem só olha o banco.
+
+### `locustfile-comparativo.py` — lado fechado do experimento pareado
+
+Jornada de login + leitura autenticada, com `constant_throughput(1)` para
+fixar a carga oferecida.
+
+**Que problema procura:** *confundir capacidade com resiliência*. É a metade
+fechada de um experimento cuja outra metade é
+`../artillery/scenarios/03-comparativo-modelo-aberto.yml`. Mesma carga
+oferecida, mesmas rotas, mesma duração — só o modelo muda. Serve para
+mostrar que os dois números respondem perguntas diferentes e que nenhum
+substitui o outro.
+
+---
+
+## Armadilhas de medição que a suite evita
+
+Cada uma destas é um jeito de o teste medir a coisa errada e reportar um
+resultado bonito e falso.
+
+| Armadilha | Como é evitada |
+|---|---|
+| **Descobrir id dentro da task** infla toda ação com uma requisição extra | ids reais de produto, categoria e marca são pré-carregados uma vez no `test_start` (`common/catalog.py`) |
+| **Relatório com uma linha por id** torna qualquer percentil inútil | rotas com id usam `name="GET /products/{id}"` |
+| **Token expirando no meio** faz metade das requisições virar 401 e culpar a API | o JWT expira em 300s; o mixin renova aos 240s (`common/auth.py`) |
+| **Regra de negócio contada como falha de carga** leva o time a caçar o problema errado | a loja aceita um Thor Hammer por carrinho, e o `CartService.php` recusa nas duas rotas (linhas 43 e 117); as duas são tratadas como resposta esperada |
+| **Estado do teste divergindo do servidor** faz o teste medir o próprio defeito | `items` é um conjunto: com lista, uma duplicata sobrevivia ao `remove_item` e a operação seguinte batia em 400 |
+| **Pré-carregamento falhando em silêncio** produz relatório limpo com menos requisições | um `raise` no handler de `test_start` não basta (o Locust captura e continua), então o handler chama `environment.runner.quit()` |
+| **O gerador saturar antes da API** faz você medir o Locust, não o sistema | Python executa um thread por vez; se o RPS parar de subir com a CPU do processo no teto, distribua com `--processes` |
+
+---
 
 ## Estrutura
 
 ```
 locust/
-├── run-locust.sh          # runner (setup do venv + pre-flight + perfis)
-├── locustfile.py          # entrypoint, importa os cenarios
-├── locust.conf            # defaults de linha de comando
-├── requirements.txt
+├── setup.sh                 # só preparo do ambiente; não roda teste
+├── locustfile.py            # entrypoint da suite
+├── locustfile-comparativo.py# entrypoint do experimento pareado
+├── locustfile-estoque.py    # entrypoint do teste de sobrevenda
+├── locust.conf              # defaults de linha de comando
 ├── common/
-│   ├── config.py          # hosts, credenciais, constantes
-│   ├── catalog.py         # cache de ids reais carregado no test_start
-│   └── auth.py            # mixin de login com renovacao de token
+│   ├── config.py            # hosts, credenciais, constantes
+│   ├── catalog.py           # cache de ids reais carregado no test_start
+│   └── auth.py              # mixin de login com renovação de token
 ├── scenarios/
-│   ├── browse.py          # BrowseUser
-│   ├── cart.py            # CartUser
-│   └── authenticated.py   # AuthenticatedUser
-└── reports/               # saida HTML/CSV (ignorada pelo git)
+│   ├── browse.py            # BrowseUser
+│   ├── cart.py              # CartUser
+│   ├── authenticated.py     # AuthenticatedUser
+│   ├── comparativo.py       # ComparativoUser
+│   └── estoque.py           # EstoqueUser (sobrevenda sob concorrência)
+└── shapes/
+    ├── degraus.py           # LoadTestShape da rampa escalonada
+    └── degraus_config.py    # tabela de degraus, sem dependência do Locust
 ```
+
+A suite bate direto na API (`http://localhost:8091`). A UI Angular não é
+exercitada: ela serve arquivos estáticos, e o gargalo está na API.
