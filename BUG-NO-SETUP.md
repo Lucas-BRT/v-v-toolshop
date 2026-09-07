@@ -4,6 +4,7 @@
 > Data da investigação: 2026-09-05
 > Commit da base: `9e7736c3` (branch `main`)
 > Sprint sob teste: `sprint5` (`SPRINT=sprint5` no `.env`)
+> Procedimento operacional de contorno: [`FIX-PERMISSOES.md`](FIX-PERMISSOES.md)
 
 ---
 
@@ -103,6 +104,43 @@ remove o container `cron` já existente — ele apenas deixa de ser gerenciado e
 execução como container órfão. Irrelevante para este defeito, mas registrado por ter sido
 testado durante a investigação.
 
+### 5.1 Recorrência observada — 2026-09-07
+
+O defeito voltou a se manifestar, agora em **rota diferente**: `GET /brands` retornando 500
+enquanto `/products`, `/categories` e `/status` respondiam 200. Detectado durante execução
+do Locust, que aborta o carregamento do catálogo:
+
+```
+ERROR/common.catalog: Falha ao carregar catalogo de http://localhost:8091:
+500 Server Error: Internal Server Error for url: http://localhost:8091/brands
+```
+
+Mesma causa-raiz, mesma assinatura no log:
+
+```
+local.CRITICAL: Unhandled Exception {"exception":"ErrorException","message":
+"file_put_contents(/var/www/storage/framework/cache/data/c9/4c/c94c1f04...):
+Failed to open stream: Permission denied","route":"brands","method":"GET"}
+```
+
+Confirmado: `data/c9/4c` estava `drwxr-xr-x` dono **82**, com php-fpm em uid **1000**.
+
+Duas observações relevantes:
+
+1. **A rota afetada varia conforme quais entradas de cache já existem em disco.** Em
+   2026-09-05 foi `/products` (`ProductService::index()`); em 2026-09-07 foi `/brands`
+   (`BrandService::getAllBrands()`, `app/Services/BrandService.php:17`, chave `brands.all`,
+   TTL 3600s). Os diretórios de primeiro nível sob `data/` estavam com escrita de grupo,
+   então parte das rotas seguia funcionando — apenas os subdiretórios de segundo nível
+   herdados do `chown` anterior é que bloqueavam. Isso mascara o diagnóstico: o sintoma
+   parece específico de uma rota, mas o defeito é do ambiente.
+2. **Nesta recorrência o log estava gravável**, ao contrário de 2026-09-05 (seção 3).
+   Por isso o erro apareceu em `storage/logs/laravel.log` de imediato, sem a etapa extra
+   de destravar a escrita do log.
+
+Reforça a conclusão da seção 5: o contorno é volátil e precisa ser reaplicado, e nenhuma
+execução de teste deve começar sem a verificação de smoke.
+
 ## 6. Contorno aplicado
 
 ```bash
@@ -121,6 +159,19 @@ QUERY /products -> 200
 ```
 
 **Paliativo, não corretivo.** Precisa ser reaplicado após cada `docker compose up`.
+
+Variante aplicada na recorrência de 2026-09-07, que além da permissão descarta as entradas
+de cache gravadas com dono errado (o php-fpm as recria como dono):
+
+```bash
+docker exec -u root pst-laravel-api-1 sh -c \
+  'rm -rf /var/www/storage/framework/cache/data/* && \
+   chmod -R 777 /var/www/storage /var/www/bootstrap/cache'
+```
+
+Verificação pós-contorno (2026-09-07): `/brands`, `/categories`, `/categories/tree`,
+`/products`, `/products/search` e `/status` em 200; Locust com 5 usuários por 20s,
+40 requisições, `0(0.00%)` de falhas.
 
 ## 7. Correções definitivas possíveis
 

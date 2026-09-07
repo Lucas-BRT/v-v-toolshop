@@ -3,8 +3,14 @@
 Comandos prontos para copiar e colar. São a CLI original de cada ferramenta,
 sem wrapper: o que você cola é exatamente o que a ferramenta recebe.
 
-Só há dois scripts neste repositório, e nenhum deles roda teste — os dois
-apenas preparam o ambiente: `locust/setup.sh` e `artillery/setup.sh`.
+Há quatro scripts no repositório, e nenhum deles roda teste:
+
+| Script | O que faz |
+|---|---|
+| `locust/setup.sh` | prepara o ambiente (venv + dependências) |
+| `artillery/setup.sh` | prepara o ambiente (`npm install`) |
+| `locust/conferir-estoque.sh` | lê o estoque pelo banco e pela API, lado a lado |
+| `reset.sh` | devolve o banco ao estado logo após o seed |
 
 Os comandos são o mínimo necessário: **rode e observe as métricas na tela.**
 Se quiser gravar o resultado em arquivo, veja a [seção 4](#4-se-quiser-gravar-o-resultado).
@@ -86,27 +92,6 @@ locust --users 50 --spawn-rate 5 --run-time 3m --autostart CartUser
 locust --users 50 --spawn-rate 5 --run-time 3m --autostart AuthenticatedUser
 ```
 
-### Rampa escalonada — acha o joelho da curva
-
-A carga vem de uma `LoadTestShape`, carregada como segundo locustfile.
-`--users` e `--spawn-rate` não aparecem: quem controla os dois é a shape, e
-passá-los não dá erro nem aviso — são silenciosamente ignorados.
-
-```bash
-# degraus 10 → 400 usuários, 60s cada (6 minutos no total)
-locust -f locustfile.py,shapes/degraus.py --autostart AuthenticatedUser
-```
-
-```bash
-# degraus mais curtos, para apresentar em ~2 minutos
-STEP_SECONDS=20 locust -f locustfile.py,shapes/degraus.py --autostart AuthenticatedUser
-```
-
-```bash
-# no carrinho, para contraste: não satura nem a 400 usuários
-locust -f locustfile.py,shapes/degraus.py --autostart CartUser
-```
-
 ### Sobrevenda de estoque — teste de concorrência
 
 Não mede desempenho: usa a carga para provocar uma condição de corrida.
@@ -114,7 +99,7 @@ Vários clientes compram o mesmo produto ao mesmo tempo, somando mais
 unidades do que existem. **Sai com exit code 1 quando há sobrevenda.**
 
 ```bash
-locust -f locustfile-estoque.py --users 20 --spawn-rate 20 --run-time 20s --headless
+locust -f locustfile-estoque.py --users 20 --spawn-rate 20 --run-time 20s --autostart
 echo "exit=$?"
 ```
 
@@ -126,6 +111,125 @@ worker, então os débitos ficam parados):
 cd ../practice-software-testing
 docker compose exec laravel-api php artisan queue:work --stop-when-empty
 ```
+
+#### Conferir o estoque
+
+As duas leituras **discordam**, e a discordância é um achado, não um erro de
+comando. O banco mostra o valor real. A API responde através de um cache de
+5 minutos (`ProductService::CACHE_TTL = 300`, `CACHE_DRIVER=file`) que o job
+de débito nunca invalida — só `ProductService::update()` chama `clearCache()`,
+e o `UpdateProductInventory` desconta direto via Eloquent, sem passar por lá.
+
+Medido: banco em `-75` enquanto a API respondia `25` por 5 minutos seguidos,
+virando para `-75` sozinha no vencimento do TTL. Ou seja, a loja anuncia
+estoque que não existe pela duração do cache — o que permite ainda mais
+sobrevenda.
+
+Use o banco para o valor real; a API para mostrar o atraso. Para forçar a API
+a concordar sem esperar: `docker compose exec laravel-api php artisan cache:clear`.
+
+`conferir-estoque.sh` lê **as duas fontes numa única execução** — banco e API
+lado a lado, uma coluna cada. A coluna `!` marca onde elas discordam:
+
+```bash
+cd locust
+./conferir-estoque.sh                                 # todos os produtos
+./conferir-estoque.sh 01M1WDNXEWY6TZ8JS4P6XTZR7N      # só um produto
+./conferir-estoque.sh --limpar-cache                  # invalida o cache antes de ler
+```
+
+```
+FONTE 1 = banco (products.stock, valor real)
+FONTE 2 = API  (/products, atraves do cache de 300s)
+
+ID                           PRODUTO                       BANCO        API  !
+------------------------------------------------------------------------------
+01M1WDNXEWY6TZ8JS4P6XTZR7M   Pliers                         -275       -275
+01M1WDNXEWY6TZ8JS4P6XTZR7N   Bolt Cutters                   -999        -75  <-- divergem
+01M1WDNXEWY6TZ8JS4P6XTZR7P   Long Nose Pliers                  0          0
+
+2 produto(s) com estoque NEGATIVO no banco — a API vendeu o que nao tinha.
+1 linha(s) divergem: a API serve valor cacheado (TTL 300s) que o job de
+debito nunca invalida. Use --limpar-cache para forcar, ou espere o TTL vencer.
+```
+
+As duas consultas separadas, caso queira rodar uma de cada vez sem o script:
+
+```bash
+# banco — o valor real
+cd ../practice-software-testing
+docker compose exec -T mariadb mysql -uroot -proot toolshop -e "
+  SELECT id, name, stock FROM products WHERE stock IS NOT NULL ORDER BY stock LIMIT 10;
+  SELECT COUNT(*) AS jobs_na_fila FROM jobs;"
+```
+
+```bash
+# API — através do cache; precisa de token de admin, porque para os demais
+# `in_stock` vem como booleano (`Product::getInStockAttribute`)
+API=${TOOLSHOP_API_HOST:-http://localhost:8091}
+TOKEN=$(curl -s -H 'Content-Type: application/json' \
+    -d '{"email":"admin@practicesoftwaretesting.com","password":"welcome01"}' \
+    "$API/users/login" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+
+curl -s -H "Authorization: Bearer $TOKEN" "$API/products?page=1" | python3 -c '
+import json, sys
+for p in sorted(json.load(sys.stdin)["data"], key=lambda p: p["in_stock"]):
+    print("%6s  %-40s %s" % (p["in_stock"], p["name"], p["id"]))
+'
+```
+
+`stock IS NOT NULL` porque os itens de aluguel (Excavator, Bulldozer, Crane)
+não têm estoque — sem o filtro eles ocupam o topo da lista ordenada.
+
+#### Os quatro defeitos que este cenário expõe
+
+| #   | Defeito                                                                                                              | Onde                                     | Código ou ambiente |
+| --- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ------------------ |
+| 1   | Nenhuma checagem de estoque no fluxo de compra: a API aceita o pedido e emite a nota                                 | `CartService`, `InvoiceService.php:60`   | código             |
+| 2   | `decrement` sem `where('stock','>=',$q)`, sem transação e sem lock — estoque vai a negativo                          | `Jobs/UpdateProductInventory.php`        | código             |
+| 3   | Cache de produtos de 300s que o job de débito nunca invalida — a loja anuncia estoque que não existe                 | `ProductService.php:19`                  | código             |
+| 4   | `QUEUE_CONNECTION=database` sem worker no `docker-compose` — jobs se acumulam e escondem 1–3 de quem só olha o banco | `docker-compose.yml`, `sprint5/API/.env` | ambiente           |
+
+O item 4 é o único que não é defeito da aplicação: o `.env.example` do projeto
+traz `QUEUE_CONNECTION=sync`, que roda o job inline e dispensa worker. Quem
+montou este ambiente trocou para `database`. Ele não _cria_ os defeitos 1–3 —
+apenas os esconde.
+
+Medição que separa os três primeiros: 20 pedidos de 5 unidades sobre estoque 25. Todos aceitos (defeito 1). Depois do `queue:work`, banco em `-75`
+(defeito 2). A API continuou respondendo `25` por cinco minutos, virando
+sozinha às 08:04:20 quando o TTL venceu (defeito 3).
+
+Sequência que fecha o argumento:
+
+```bash
+cd locust
+
+# 1. estado inicial — tudo em 25, banco e API de acordo
+./conferir-estoque.sh
+
+# 2. o teste — 20 pedidos de 5 unidades sobre um estoque de 25.
+#    Sai com exit code 1: todos aceitos, nenhum recusado.
+locust -f locustfile-estoque.py --users 20 --spawn-rate 20 --run-time 20s --headless
+
+# 3. logo depois: banco e API ainda em 25, porque os jobs estão parados na fila
+./conferir-estoque.sh
+
+# 4. processa a fila na mão — é o worker que o docker-compose não sobe
+cd ../practice-software-testing
+docker compose exec laravel-api php artisan queue:work --stop-when-empty
+
+# 5. agora o banco mostra -75, e a API ainda mostra 25: a coluna `!` acusa
+cd ../locust
+./conferir-estoque.sh
+
+# 6. cinco minutos depois (ou com --limpar-cache) a API finalmente concorda
+./conferir-estoque.sh --limpar-cache
+```
+
+Para voltar ao estado semeado, da raiz do repositório: `./reset.sh`. Ele
+recria o banco, esvazia a fila `jobs`, apaga as notas e limpa o cache — e
+com isso apaga também as evidências desta execução, então registre o que
+precisa antes.
 
 Ajustes:
 
@@ -147,41 +251,6 @@ carga que o Artillery oferece com `arrivalRate: 150`.
 ```bash
 locust -f locustfile-comparativo.py --users 150 --spawn-rate 150 --run-time 60s --headless
 ```
-
-### Variações
-
-```bash
-# sem interface web (CI): troque --autostart por --headless
-locust --users 50 --spawn-rate 5 --run-time 3m --headless CartUser
-
-# outra porta, se a 8089 estiver presa
-locust --users 5 --run-time 30s --autostart --web-port 8090
-
-# encerra sozinho ao fim, sem esperar Ctrl+C
-locust --users 5 --run-time 30s --autostart --autoquit 0
-
-# distribui em processos, se o gerador saturar antes da API (experimental)
-locust -f locustfile.py,shapes/degraus.py --headless --processes 4 AuthenticatedUser
-
-# distribuído entre máquinas
-locust --master
-locust --worker --master-host 192.168.1.10
-
-# apontar para outro ambiente
-TOOLSHOP_API_HOST=http://staging.exemplo:8091 locust --users 5 --run-time 30s --headless
-```
-
-### Variáveis de ambiente lidas pela suite
-
-| Variável | Default | Efeito |
-|---|---|---|
-| `TOOLSHOP_API_HOST` | `http://localhost:8091` | host da API |
-| `STEP_SECONDS` | `60` | segundos em cada degrau da rampa |
-| `TOOLSHOP_CUSTOMER_EMAIL` / `_PASSWORD` | usuário semeado | credenciais do cenário logado |
-| `TOOLSHOP_CATALOG_PAGES` | `2` | páginas de produto pré-carregadas |
-| `TOOLSHOP_STOCK_QTY` | `5` | unidades por pedido no teste de sobrevenda |
-| `TOOLSHOP_STOCK_PRODUCT` | menor estoque positivo | produto alvo do teste de sobrevenda |
-| `TOOLSHOP_ADMIN_EMAIL` / `_PASSWORD` | admin semeado | conta que enxerga o número do estoque |
 
 ---
 
@@ -223,21 +292,6 @@ for f in scenarios/*.yml; do npx artillery run "$f"; done
 ```
 
 Leva cerca de 4 minutos. Não para no primeiro que falhar.
-
-### Variações
-
-```bash
-# só o resumo, sem o log fase a fase
-npx artillery run --quiet scenarios/02-portao-ci.yml
-
-# apontar para outro ambiente
-npx artillery run --target http://staging.exemplo:8091 scenarios/02-portao-ci.yml
-
-# sobrescrever as fases sem editar o arquivo
-npx artillery run \
-    --overrides '{"config":{"phases":[{"duration":10,"arrivalRate":5}]}}' \
-    scenarios/01-pico-de-trafego.yml
-```
 
 ---
 
@@ -337,8 +391,9 @@ for i in json.load(open(sys.argv[1]))["intermediate"]:
 ## 5. Operação e problemas conhecidos
 
 ```bash
-# conta de cliente travada (HTTP 423) após 3 logins inválidos
-cd artillery && ./setup.sh reset
+# devolve o banco ao estado logo após o seed — estoque em 25, fila `jobs`
+# vazia, notas apagadas, contas destravadas (HTTP 423 após 3 logins inválidos)
+./reset.sh
 # equivalente: curl -X POST http://localhost:8091/refresh
 ```
 

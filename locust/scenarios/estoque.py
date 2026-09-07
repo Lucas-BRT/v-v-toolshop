@@ -41,10 +41,20 @@ O QUE FOI ENCONTRADO NA APLICACAO
    `decrement` e atomico no nivel do SQL, entao nao ha lost update — mas
    nada impede o estoque de ficar negativo.
 
-3. O job e enfileirado (`QUEUE_CONNECTION=database`) e nao ha worker rodando
-   no docker-compose. Na pratica os jobs se acumulam na tabela `jobs` e o
-   estoque nunca muda — o que esconde o defeito de quem so olha o banco.
-   Para ver o estoque ficar negativo de verdade:
+3. O `ProductService` guarda os produtos em cache por 300s
+   (`CACHE_TTL = 300`, `CACHE_DRIVER=file`) e o job de debito nunca invalida
+   esse cache: so `ProductService::update()` chama `clearCache()`, e o job
+   desconta direto via Eloquent, sem passar por la. Consequencia medida: com
+   o banco ja em -75, a API respondeu 25 por cinco minutos, virando sozinha
+   no vencimento do TTL. A loja anuncia estoque que nao existe — o que abre
+   espaco para ainda mais sobrevenda.
+
+4. O job e enfileirado (`QUEUE_CONNECTION=database`) e nao ha worker rodando
+   no docker-compose. Este ultimo item e do ambiente, nao do codigo: o
+   `.env.example` do projeto traz `QUEUE_CONNECTION=sync`, que roda o job
+   inline. Com `database` e sem worker os jobs se acumulam na tabela `jobs` e
+   o estoque nunca muda — o que esconde os defeitos acima de quem so olha o
+   banco. Para processar a fila na mao:
 
        docker compose exec laravel-api php artisan queue:work --stop-when-empty
 
@@ -55,11 +65,15 @@ RESULTADO MEDIDO
     estoque inicial ................ 25
     unidades aceitas em pedidos .... 100
     pedidos aceitos / recusados .... 20 / 0
-    estoque final na API ........... 25   (jobs ainda na fila)
+    estoque final na API ........... 25   (leitura cacheada)
 
 Nenhum pedido recusado: sobrevenda de 75 unidades. Processando a fila em
-seguida, o estoque do produto foi para **-75** — o valor exato previsto pelo
-teste.
+seguida, o estoque no banco foi para **-75** — o valor exato previsto pelo
+teste. A API continuou respondendo 25 por mais cinco minutos, ate o cache
+vencer. O valor real esta sempre no banco:
+
+    docker compose exec -T mariadb mysql -uroot -proot toolshop \
+      -e "SELECT name, stock FROM products WHERE stock IS NOT NULL ORDER BY stock LIMIT 5;"
 
 Uso
 ---
@@ -71,7 +85,8 @@ import os
 
 import requests
 from gevent.lock import Semaphore
-from locust import events, task
+from locust import constant, events, task
+from locust.exception import StopUser
 
 from common import config
 from common.auth import AuthMixin
@@ -203,10 +218,14 @@ def verificar(environment, **kwargs):
     logger.info("  unidades aceitas em pedidos .... %d", vendidas)
     logger.info("  pedidos aceitos / recusados .... %d / %d",
                 _contadores["pedidos_aceitos"], _contadores["pedidos_recusados"])
-    logger.info("  estoque final na API ........... %s", final)
+    logger.info("  estoque final na API ........... %s  (leitura cacheada)", final)
 
     if final is not None and final == inicial and vendidas > 0:
-        logger.info("  (estoque intacto: os jobs de debito estao na fila, sem worker)")
+        logger.info("  (valor inalterado — duas causas possiveis, as duas medidas:")
+        logger.info("     1. os jobs de debito estao na fila, sem worker que os processe;")
+        logger.info("     2. o cache de produtos da API guarda o valor antigo por 300s")
+        logger.info("        e o job de debito nunca o invalida.")
+        logger.info("   O valor real esta no banco: SELECT stock FROM products WHERE id=...)")
 
     if vendidas > inicial:
         logger.error("  RESULTADO: FALHA — sobrevenda de %d unidades", vendidas - inicial)
@@ -233,8 +252,9 @@ class EstoqueUser(AuthMixin):
     host = config.API_HOST
 
     # Sem espera: o objetivo e concentrar as compras na mesma janela de tempo,
-    # que e o que provoca a corrida.
-    wait_time = None
+    # que e o que provoca a corrida. `wait_time = None` NAO funciona: o Locust
+    # trata o valor falsy como "nao definido" e levanta MissingWaitTimeError.
+    wait_time = constant(0)
 
     email = config.CUSTOMER_EMAIL
     password = config.CUSTOMER_PASSWORD
@@ -248,6 +268,17 @@ class EstoqueUser(AuthMixin):
 
     @task
     def comprar(self):
+        """Uma compra por usuario, e entao o usuario para.
+
+        O oraculo compara unidades aceitas com o estoque inicial, entao a
+        carga precisa ser deterministica: N usuarios x QUANTIDADE unidades.
+        Sem o StopUser cada usuario ficaria comprando em loop ate o fim do
+        --run-time e o total dependeria da duracao, nao do cenario.
+        """
+        self._comprar()
+        raise StopUser()
+
+    def _comprar(self):
         if not alvo:
             return
 

@@ -237,7 +237,7 @@ file_put_contents(/var/www/storage/framework/cache/data/99/08/...):
 Failed to open stream: Permission denied
 ```
 
-O `POST /refresh` (o `./setup.sh reset`) **não conserta** — ele
+O `POST /refresh` (o `../reset.sh`) **não conserta** — ele
 recria o banco, não o cache em disco. Reparo:
 
 ```bash
